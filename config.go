@@ -24,6 +24,7 @@ type Config struct {
 	startService   bool
 	onlyFiles      bool
 	onlyDirs       bool
+	combined       bool
 	allFiles bool
 }
 
@@ -50,6 +51,8 @@ func (c *Config) registerFlags(f *flag.FlagSet) {
             Only match directories (not files).`)
 	f.BoolVar(&c.allFiles, "all", false, `
             Include normally ignored files (VCS and editor special files).`)
+	f.BoolVar(&c.combined, "combine-changes", false, `
+            Invoke command once for multiple changes.`)
 }
 
 // ReadConfigs reads configurations from either a file or, as a special case, stdin if "-" is given for path.

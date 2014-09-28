@@ -24,6 +24,7 @@ type Reflex struct {
 	matcher      Matcher
 	onlyFiles    bool
 	onlyDirs     bool
+	combined     bool
 	command      []string
 	subSymbol    string
 	done         chan struct{}
@@ -72,6 +73,10 @@ func NewReflex(c *Config) (*Reflex, error) {
 		backlog = NewUnifiedBacklog()
 	}
 
+	if c.combined && !substitution {
+		return nil, errors.New("using --combine-changes has no effect without a substitution symbol")
+	}
+
 	if c.onlyFiles && c.onlyDirs {
 		return nil, errors.New("cannot specify both --only-files and --only-dirs")
 	}
@@ -84,6 +89,7 @@ func NewReflex(c *Config) (*Reflex, error) {
 		matcher:      matcher,
 		onlyFiles:    c.onlyFiles,
 		onlyDirs:     c.onlyDirs,
+		combined:     c.combined,
 		command:      c.command,
 		subSymbol:    c.subSymbol,
 		done:         make(chan struct{}),
@@ -171,6 +177,31 @@ func (r *Reflex) batch(out chan<- string, in <-chan string) {
 	}
 }
 
+// A vairant of batch that sends all backlogged paths at once.
+func (r *Reflex) batchCombined(out chan<- []string, in <-chan string) {
+	for name := range in {
+		r.backlog.Add(name)
+		timer := time.NewTimer(300 * time.Millisecond)
+	outer:
+		for {
+			select {
+			case name := <-in:
+				r.backlog.Add(name)
+			case <-timer.C:
+				for {
+					select {
+					case name := <-in:
+						r.backlog.Add(name)
+					case out <- r.backlog.All():
+						for !r.backlog.RemoveOne() { }
+						break outer
+					}
+				}
+			}
+		}
+	}
+}
+
 // runEach runs the command on each name that comes through the names channel. Each {} is replaced by the name
 // of the file. The output of the command is passed line-by-line to the stdout chan.
 func (r *Reflex) runEach(names <-chan string) {
@@ -184,6 +215,27 @@ func (r *Reflex) runEach(names <-chan string) {
 			r.runCommand(name, stdout)
 		} else {
 			r.runCommand(name, stdout)
+			<-r.done
+			r.mu.Lock()
+			r.running = false
+			r.mu.Unlock()
+		}
+	}
+}
+
+// A variant of runEach that sends all backlogged paths at once.
+func (r *Reflex) runEachCombined(names <-chan []string) {
+	for name := range names {
+		combinedName := strings.Join(name, " ")
+		if r.startService {
+			if r.Running() {
+				infoPrintln(r.id, "Killing service")
+				r.terminate()
+			}
+			infoPrintln(r.id, "Starting service")
+			r.runCommand(combinedName, stdout)
+		} else {
+			r.runCommand(combinedName, stdout)
 			<-r.done
 			r.mu.Lock()
 			r.running = false
@@ -283,10 +335,19 @@ func (r *Reflex) runCommand(name string, stdout chan<- OutMsg) {
 
 func (r *Reflex) Start(changes <-chan string) {
 	filtered := make(chan string)
-	batched := make(chan string)
-	go r.filterMatching(filtered, changes)
-	go r.batch(batched, filtered)
-	go r.runEach(batched)
+
+	if r.combined {
+		batched := make(chan []string)
+		go r.filterMatching(filtered, changes)
+		go r.batchCombined(batched, filtered)
+		go r.runEachCombined(batched)
+	} else {
+		batched := make(chan string)
+		go r.filterMatching(filtered, changes)
+		go r.batch(batched, filtered)
+		go r.runEach(batched)
+	}
+
 	if r.startService {
 		// Easy hack to kick off the initial start.
 		infoPrintln(r.id, "Starting service")

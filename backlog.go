@@ -11,6 +11,8 @@ type Backlog interface {
 	Next() string
 	// Remove the next path from the backlog and returns whether the backlog is now empty.
 	RemoveOne() (empty bool)
+	// Return all paths tracked by the backlog
+	All() []string
 }
 
 // A UnifiedBacklog only remembers one backlog item at a time.
@@ -49,6 +51,13 @@ func (b *UnifiedBacklog) RemoveOne() bool {
 	return true
 }
 
+// All returns all the paths in b.
+func (b *UnifiedBacklog) All() []string {
+	paths := make([]string, 1)
+	paths[0] = b.s
+	return paths
+}
+
 // A UniqueFilesBacklog keeps a set of the paths it has received.
 type UniqueFilesBacklog struct {
 	empty bool
@@ -79,6 +88,20 @@ func (b *UniqueFilesBacklog) Next() string {
 		panic("Next() called on empty backlog")
 	}
 	return b.next
+}
+
+// All returns all the paths in b.
+func (b *UniqueFilesBacklog) All() []string {
+	if b.empty {
+		panic("All() called on empty backlog")
+	}
+	i, paths := 0, make([]string, len(b.rest) + 1)
+	for x := range b.rest {
+		paths[i] = x
+		i++
+	}
+	paths[i] = b.next
+	return paths
 }
 
 // RemoveOne removes one of the paths from b (the same path that was returned by a preceding call to Next).
